@@ -1367,7 +1367,7 @@ def get_include_and_linking_paths(
         os.environ["CUDA_HOME"] = os.path.dirname(build_paths.cuda())
     from torch.utils import cpp_extension
 
-    macros = ""
+    macros = vec_isa.build_macro() if vec_isa != invalid_vec_isa else ""
     build_arch_flags = ""
     if sys.platform == "linux" and (
         include_pytorch
@@ -1408,7 +1408,6 @@ def get_include_and_linking_paths(
                                     lpaths[i] = os.path.join(path, root)
                                     lpaths.append(os.path.join(lpaths[i], "stubs"))
                                     break
-        macros = vec_isa.build_macro()
         if macros:
             if config.is_fbcode() and vec_isa != invalid_vec_isa:
                 cap = str(vec_isa).upper()

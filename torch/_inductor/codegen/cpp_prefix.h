@@ -278,7 +278,7 @@ inline float flag_to_float_scalar(T src) {
   return ret;
 }
 
-#if defined(CPU_CAPABILITY_AVX512) || defined(CPU_CAPABILITY_AVX2) || defined(CPU_CAPABILITY_ZVECTOR)
+#if defined(CPU_CAPABILITY_AVX512) || defined(CPU_CAPABILITY_AVX2) || defined(CPU_CAPABILITY_ZVECTOR) || defined(CPU_CAPABILITY_NEON)
 
 inline at::vec::Vectorized<float> masked_load(const float* src, at::vec::Vectorized<float> mask) {
 # if defined(CPU_CAPABILITY_AVX512)
@@ -290,7 +290,7 @@ inline at::vec::Vectorized<float> masked_load(const float* src, at::vec::Vectori
     auto all_ones = _mm256_set1_epi32(0xFFFFFFFF);
     auto mmask = _mm256_cmpeq_epi32(_mm256_castps_si256(mask), all_ones);
     return _mm256_maskload_ps(src, mmask);
-# elif defined(CPU_CAPABILITY_ZVECTOR)
+# elif defined(CPU_CAPABILITY_ZVECTOR) || defined(CPU_CAPABILITY_NEON)
     auto result = at::vec::Vectorized<float>::loadu(src);
     return (result & mask);
 # else
@@ -317,7 +317,7 @@ inline masked_load(const T* src, at::vec::Vectorized<float> mask) {
     result[i] = mmask[i] == 0xFFFFFFFF ? src[i].x: uint16_t(0);
   }
   return at::vec::Vectorized<T>::loadu(result);
-# elif defined(CPU_CAPABILITY_ZVECTOR)
+# elif defined(CPU_CAPABILITY_ZVECTOR) || defined(CPU_CAPABILITY_NEON)
   auto result = at::vec::Vectorized<T>::loadu(src, 8);
   uint32_t maskdata[8] = { 0 };
   uint16_t maskdata_dest[16] = { 0 };
@@ -351,7 +351,7 @@ inline masked_load(const T* src, at::vec::Vectorized<float> mask) {
       result[i] = mmask[i] == 0xFFFFFFFF ? src[i]: T(0);
     }
     return at::vec::Vectorized<T>::loadu(result);
-# elif defined(CPU_CAPABILITY_ZVECTOR)
+# elif defined(CPU_CAPABILITY_ZVECTOR) || defined(CPU_CAPABILITY_NEON)
     auto result = at::vec::Vectorized<T>::loadu(src, 8);
     uint32_t maskdata[8];
     T maskdata_dest[32] = { 0 };
