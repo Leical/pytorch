@@ -241,18 +241,13 @@ def reduction_project(reduction_type, acc):
 
 
 def is_to_lowp_dtype(expr):
-    to_exprs = ["cvt_fp32_to_lowp_fp", "c10::convert"]
-    if any(to_expr in expr for to_expr in to_exprs):
-        if "half" in expr:
-            return torch.half
-        if "bfloat16" in expr:
-            return torch.bfloat16
-    return None
+    to_exprs = ["convert<half>", "convert<bfloat16>"]
+    return any(to_expr in expr for to_expr in to_exprs)
 
 
-def get_lowp_to_fp32_expr(lowp_var, src_dtype, kernel):
+def get_lowp_to_fp32_expr(lowp_var, kernel):
     if isinstance(kernel, CppVecKernel):
-        return f"cvt_lowp_fp_to_fp32<{DTYPE_TO_CPP[src_dtype]}>({lowp_var})"
+        return f"at::vec::convert<float>({lowp_var})"
     else:
         assert isinstance(kernel, CppKernel)
         return f"c10::convert<float>({lowp_var})"
@@ -1391,49 +1386,20 @@ class CppVecOverrides(CppOverrides):
         assert opt_ctx_x
         assert opt_ctx_x.dtype is not None
         assert isinstance(V.kernel, CppVecKernel)
-        src_cpp_type = DTYPE_TO_CPP[opt_ctx_x.dtype]
-        cpp_type = DTYPE_TO_CPP[dtype]
-        num_vectors = V.kernel._get_num_vectors(dtype)
-        if opt_ctx_x.dtype != torch.bool and dtype == torch.bool:
-            return f"{V.kernel._get_mask_type(opt_ctx_x.dtype)}::from<{src_cpp_type},{num_vectors}>({x})"
+        src_dtype = opt_ctx_x.dtype
+        src_cpp_type = DTYPE_TO_CPP[src_dtype]
+        src_num_vectors = V.kernel._get_num_vectors(src_dtype)
+        dst_cpp_type = DTYPE_TO_CPP[dtype]
+        dst_num_vectors = V.kernel._get_num_vectors(dtype)
+        if src_dtype != torch.bool and dtype == torch.bool:
+            return f"{V.kernel._get_mask_type(src_dtype)}::from<{src_cpp_type},{src_num_vectors}>({x})"
         if opt_ctx_x.dtype == torch.bool and dtype != torch.bool:
-            return f"{x}.to<{cpp_type},{num_vectors}>()"
-        if opt_ctx_x.dtype in (torch.float, torch.float32) and dtype in DTYPE_LOWP_FP:
-            return f"cvt_fp32_to_lowp_fp<{cpp_type}>({x})"
-        if opt_ctx_x.dtype in DTYPE_LOWP_FP and dtype in (torch.float, torch.float32):
-            return f"cvt_lowp_fp_to_fp32<{src_cpp_type}>({x})"
-        if opt_ctx_x.dtype in (torch.uint8, torch.int8) and dtype in (
-            torch.float,
-            torch.float32,
-        ):
-            # Note: this function only convert inputs number of elements equal to at::vec::Vectorized<float>.size()
-            return f"at::vec::convert_int8_to_float({x})"
-        if opt_ctx_x.dtype in (torch.float, torch.float32) and dtype in (
-            torch.uint8,
-            torch.int8,
-        ):
-            # if we already handle the saturation previously.
-            # * Pattern match of quantization op in the loop body.
-            # * Skip the explicit saturation and clamp inside at::vec::convert_float_to_int8.
-            return f"at::vec::convert_float_to_int8<{cpp_type}>({x})"
-        if opt_ctx_x.dtype == torch.int32 and dtype == torch.float:
-            return f"at::vec::convert_to_fp_of_same_size<float>({x})"
-        if opt_ctx_x.dtype == torch.float and dtype == torch.int32:
-            return f"at::vec::convert_to_int_of_same_size({x})"
-        if opt_ctx_x.dtype == torch.int64 and dtype == torch.float:
-            return f"cvt_int64_to_fp32({x})"
-        if opt_ctx_x.dtype == torch.float and dtype == torch.int64:
-            return f"cvt_fp32_to_int64({x})"
-        if opt_ctx_x.dtype == torch.int32 and dtype == torch.int64:
-            return f"cvt_int32_to_int64({x})"
-        if opt_ctx_x.dtype == torch.int64 and dtype == torch.int32:
-            return f"cvt_int64_to_int32({x})"
-        if opt_ctx_x.dtype in (torch.int8, torch.uint8) and dtype == torch.int32:
-            return f"cvt_int8_to_int32({x})"
-        if opt_ctx_x.dtype in (torch.int8, torch.uint8) and dtype == torch.int64:
-            return f"cvt_int8_to_int64({x})"
-        # TODO(jgong5): support conversion for other types
-        # currently we only allow load/store torch.uint8 and handle conversion there
+            return f"{x}.to<{dst_cpp_type},{dst_num_vectors}>()"
+        if src_dtype != dtype:
+            if src_num_vectors == dst_num_vectors == 1:
+                return f"at::vec::convert<{dst_cpp_type}>({x})"
+            else:
+                return f"at::vec::convert<{dst_cpp_type},{dst_num_vectors},{src_cpp_type},{src_num_vectors}>({x})"
         return f"({x})"
 
     @staticmethod
@@ -1677,11 +1643,9 @@ class CppKernel(Kernel):
         def find_fp32_var(var, cache):
             fp32_cse_var = None
             fp32_cse_var_name = None
-            lowp_dtype = None
             for expr, cse_var in cache.items():
                 if cse_var == var:
-                    lowp_dtype = is_to_lowp_dtype(expr)
-                    if lowp_dtype:
+                    if is_to_lowp_dtype(expr):
                         m = re.search(r"tmp\d+", expr)
                         assert m
                         fp32_cse_var_name = m.group()
@@ -1691,13 +1655,11 @@ class CppKernel(Kernel):
                         fp32_cse_var = cse_var
                         break
                 assert fp32_cse_var is not None
-            return fp32_cse_var, lowp_dtype
+            return fp32_cse_var
 
-        fp32_var, lowp_dtype = find_fp32_var(var_to_store, self.cse.cache)
+        fp32_var = find_fp32_var(var_to_store, self.cse.cache)
         if fp32_var:
-            self.cse.cache[
-                get_lowp_to_fp32_expr(var_to_store, lowp_dtype, self)
-            ] = fp32_var
+            self.cse.cache[get_lowp_to_fp32_expr(var_to_store, self)] = fp32_var
 
     def scale_index_with_offset(
         self, index: sympy.Expr, scale=1, itervar_idx=-1, offset=0
@@ -2413,7 +2375,7 @@ class CppVecKernel(CppKernel):
                 if out_dtype in DTYPE_LOWP_FP and dtype == torch.float:
                     _lowp_fp_tmpvar_vec = f"{DTYPE_TO_CPP[out_dtype]}_{value}"
                     code.writeline(
-                        f"auto {_lowp_fp_tmpvar_vec} = cvt_fp32_to_lowp_fp<{DTYPE_TO_CPP[out_dtype]}>({value});"
+                        f"auto {_lowp_fp_tmpvar_vec} = at::vec::convert<{DTYPE_TO_CPP[out_dtype]}>({value});"
                     )
                     value = _lowp_fp_tmpvar_vec
                 else:
