@@ -59,6 +59,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
       TORCH_INTERNAL_ASSERT(
           allocator_, "For resizable storage, allocator must be provided");
     }
+    refresh_has_data_ptr_check();
   }
 
   StorageImpl(
@@ -118,14 +119,9 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     return resizable_;
   }
 
-  at::DataPtr& mutable_data_ptr() {
-    maybe_materialize_cow();
-    return data_ptr_;
-  }
+  at::DataPtr& mutable_data_ptr();
 
-  const at::DataPtr& data_ptr() const {
-    return data_ptr_;
-  }
+  const at::DataPtr& data_ptr() const;
 
   // Returns the previous data_ptr
   at::DataPtr set_data_ptr(at::DataPtr&& data_ptr) {
@@ -137,16 +133,12 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
 
   void set_data_ptr_noswap(at::DataPtr&& data_ptr) {
     data_ptr_ = std::move(data_ptr);
+    refresh_has_data_ptr_check();
   }
 
-  const void* data() const {
-    return data_ptr_.get();
-  }
+  const void* data() const;
 
-  void* mutable_data() {
-    maybe_materialize_cow();
-    return data_ptr_.mutable_get();
-  }
+  void* mutable_data();
 
   at::DeviceType device_type() const {
     return data_ptr_.device().type();
@@ -222,6 +214,11 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     return &pyobj_slot_;
   }
 
+  void set_throw_on_mutable_data_ptr() {
+    throw_on_mutable_data_ptr_ = true;
+    refresh_has_data_ptr_check();
+  }
+
  protected:
   // materialize_cow_storage needs to call set_data_ptr_no_materlize_cow
   friend void c10::impl::cow::materialize_cow_storage(StorageImpl& storage);
@@ -231,13 +228,22 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
   at::DataPtr set_data_ptr_no_materialize_cow(at::DataPtr&& data_ptr) {
     at::DataPtr old_data_ptr(std::move(data_ptr_));
     data_ptr_ = std::move(data_ptr);
+    refresh_has_data_ptr_check();
     return old_data_ptr;
   }
 
  private:
+  void refresh_has_data_ptr_check() {
+    has_data_ptr_check_ = is_cow() || throw_on_mutable_data_ptr_;
+  }
+
+  inline bool is_cow() const {
+    return data_ptr_.get_deleter() == impl::cow::cow_deleter;
+  }
+
   // Triggers a copy if this is a copy-on-write tensor.
   void maybe_materialize_cow() {
-    if (data_ptr_.get_deleter() == impl::cow::cow_deleter) {
+    if (is_cow()) {
       impl::cow::materialize_cow_storage(*this);
     }
   }
@@ -249,6 +255,12 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
   // Identifies that Storage was received from another process and doesn't have
   // local to process cuda memory allocation
   bool received_cuda_;
+  // All special checks in data/data_ptr calls are guarded behind this single
+  // boolean. This is for performance: .data/.data_ptr calls are commonly in the
+  // hot-path.
+  bool has_data_ptr_check_ = false;
+  // If we should throw when mutable_data_ptr() or mutable_data() is called.
+  bool throw_on_mutable_data_ptr_ = false;
   Allocator* allocator_;
   impl::PyObjectSlot pyobj_slot_;
 };
@@ -272,5 +284,7 @@ C10_API c10::intrusive_ptr<c10::StorageImpl> make_storage_impl(
     c10::Allocator* allocator,
     bool resizable,
     c10::optional<at::Device> device_opt);
+
+C10_API void throwNullDataPtrError();
 
 } // namespace c10
