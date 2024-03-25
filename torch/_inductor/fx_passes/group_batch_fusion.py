@@ -16,7 +16,8 @@ from typing import (
 )
 
 import torch
-from torch._dynamo.utils import counters
+from torch._dynamo.utils import counters, optimus_scuba_log
+from torch._utils_internal import upload_graph
 
 from .. import config
 from ..pattern_matcher import (
@@ -1018,6 +1019,7 @@ def apply_group_batch_fusion(graph: torch.fx.GraphModule, rule: GroupBatchFusion
                 log.debug(
                     f"{rule.__class__.__name__}: key = {key}; subset size = {len(list(subset))}"  # noqa: G004
                 )
+        optimus_scuba_log[rule.__class__.__name__] = upload_graph(graph.graph)
 
 
 def generate_fusion_from_config(config_options: Dict[str, Any], pre_grad=True):

@@ -1,4 +1,3 @@
-import copy
 import functools
 import itertools
 import logging
@@ -46,6 +45,7 @@ from ..utils import decode_device, is_pointwise_use
 from ..virtualized import V
 from .ddp_fusion import fuse_ddp_communication
 from .group_batch_fusion import group_batch_fusion_passes
+from .pre_grad import is_same_dict, save_inductor_dict
 from .reinplace import reinplace_inplaceable_ops
 
 
@@ -85,9 +85,10 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
 
     if config.pattern_matcher:
         lazy_init()
-        inductor_before_change = copy.deepcopy(counters["inductor"])
+        optimus_scuba_log["before_recompile_post_grad"] = upload_graph(gm.graph)
+        inductor_before_change = save_inductor_dict()
         group_batch_fusion_passes(gm.graph, pre_grad=False)
-        if counters["inductor"] != inductor_before_change:
+        if not is_same_dict(counters["inductor"], inductor_before_change):
             optimus_scuba_log["group_batch_fusion_post_grad"] = upload_graph(gm.graph)
         remove_noop_ops(gm.graph)
         for patterns in pass_patterns:
@@ -118,6 +119,7 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
     decompose_auto_functionalized(gm.graph)
 
     gm.recompile()
+    optimus_scuba_log["after_recompile_post_grad"] = upload_graph(gm.graph)
     gm.graph.lint()
 
 
