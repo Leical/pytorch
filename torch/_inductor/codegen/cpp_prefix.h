@@ -615,3 +615,20 @@ inline at::vec::Vectorized<float> to_float_mask(at::vec::VectorizedN<int64_t,2> 
 }
 
 #endif
+
+#ifdef CPU_CAPABILITY_NEON
+namespace at::vec {
+template <typename T>
+typename std::enable_if_t<std::is_same_v<T, uint8_t> || std::is_same_v<T, int8_t>, at::vec::Vectorized<float>>
+inline convert_int8_to_float(at::vec::Vectorized<T> src) {
+  // Note: this function only convert inputs number of elements equal to at::vec::Vectorized<float>.size()
+  T data[at::vec::Vectorized<T>::size()];
+  float rc[at::vec::Vectorized<float>::size()];
+  src.store(data);
+  for(auto i = 0; i < at::vec::Vectorized<float>::size(); ++i) {
+          rc[i] = static_cast<float>(data[i]);
+  }
+  return at::vec::Vectorized<float>::loadu(rc);
+}
+}
+#endif
