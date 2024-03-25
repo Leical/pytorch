@@ -364,12 +364,12 @@ def setup_compile_debug():
     compile_debug = os.environ.get("TORCH_COMPILE_DEBUG", "0") == "1"
 
     if compile_debug:
-        torch._logging.set_logs(
-            dynamo=logging.DEBUG,
-            aot=logging.DEBUG,
-            inductor=logging.DEBUG,
-            output_code=True,  # this is off by default
-        )
+        # torch._logging.set_logs(
+        #     dynamo=logging.DEBUG,
+        #     aot=logging.DEBUG,
+        #     inductor=logging.DEBUG,
+        #     output_code=True,  # this is off by default
+        # )
         return add_file_handler()
 
     return contextlib.ExitStack()
@@ -1261,6 +1261,19 @@ def same(
                 log_error=log_error,
             )
             for ai, bi, fp64_refi in zip(ref, res, fp64_ref)
+        )
+    elif type(ref).__name__ == "QuestionAnsweringModelOutput":
+        return same(
+            ref.loss,
+            res.loss,
+            fp64_ref.loss,
+            cos_similarity,
+            tol,
+            equal_nan,
+            exact_dtype,
+            relax_numpy_equality,
+            ignore_non_fp,
+            log_error=log_error,
         )
     elif isinstance(ref, dict):
         assert isinstance(res, dict)
